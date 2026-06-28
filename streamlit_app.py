@@ -18,7 +18,7 @@ import wandb
 st.set_page_config(page_title="Housing Price Prediction", layout="wide")
 
 try:
-    wandb.login(key="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")   # EDIT: paste your W&B API key
+    wandb.login(key="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")   
 except Exception:
     pass
 
@@ -49,7 +49,6 @@ app_mode = st.sidebar.selectbox(
 )
 
 
-@st.cache_data
 def load_data():
     return pd.read_csv("dataset_2.csv").dropna()
 
@@ -318,4 +317,4 @@ if app_mode == "Conclusion":
 
 
 st.markdown("---")
-st.markdown("### Made by Abhi, Eric, Jessie, and Joe")   # EDIT: put your team name here
+st.markdown("### Made by Abhi, Eric, Jessie, and Joe")
