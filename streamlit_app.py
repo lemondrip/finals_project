@@ -3,6 +3,8 @@ import pandas as pd
 import streamlit as st
 import matplotlib.pyplot as plt
 import seaborn as sns
+import pydeck as pdk
+
 
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
