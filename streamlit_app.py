@@ -85,6 +85,7 @@ def scores(y_true, y_pred):
         "R2": r2_score(y_true, y_pred),
     }
 
+#Introduction Page
 
 if app_mode == "Introduction":
     st.title("Housing Price Prediction")
@@ -110,10 +111,6 @@ if app_mode == "Introduction":
     st.subheader("Dataset Preview")
     st.dataframe(df.head())
 
-    c1, c2 = st.columns(2)
-    c1.metric("Rows", df.shape[0])
-    c2.metric("Columns", df.shape[1])
-
     st.subheader("Statistical Description")
     st.dataframe(df.describe())
 
@@ -128,16 +125,24 @@ if app_mode == "Visualization":
     num_df = df.select_dtypes(include=["number"])
     list_vars = list(num_df.columns)
 
-    tab1, tab2, tab3, tab4 = st.tabs(["Distribution", "Scatter vs Price", "Correlation", "Pairplot"])
+    tab_corr, tab_dist, tab_scatter, tab_pair, tab_pie, tab_map = st.tabs(
+        ["Correlation", "Distribution", "Scatter vs Price", "Pairplot", "Pie Charts", "Map"]
+    )
 
-    with tab1:
+    with tab_corr:
+        fig, ax = plt.subplots(figsize=(10, 8))
+        sns.heatmap(num_df.corr(), annot=True, fmt=".2f", cmap="RdBu_r", center=0, ax=ax)
+        ax.set_title("Correlation Matrix")
+        st.pyplot(fig)
+
+    with tab_dist:
         var = st.selectbox("Select a variable", list_vars, key="dist_var")
         fig, ax = plt.subplots()
         sns.histplot(df[var], kde=True, ax=ax)
         ax.set_title("Distribution of " + var)
         st.pyplot(fig)
 
-    with tab2:
+    with tab_scatter:
         feature = st.selectbox("Select a feature", [c for c in list_vars if c != "Price"], key="scatter_x")
         fig, ax = plt.subplots()
         sns.scatterplot(data=df, x=feature, y="Price", ax=ax)
@@ -145,13 +150,7 @@ if app_mode == "Visualization":
         ax.set_title(feature + " vs Price")
         st.pyplot(fig)
 
-    with tab3:
-        fig, ax = plt.subplots(figsize=(10, 8))
-        sns.heatmap(num_df.corr(), annot=True, fmt=".2f", cmap="RdBu_r", center=0, ax=ax)
-        ax.set_title("Correlation Matrix")
-        st.pyplot(fig)
-
-    with tab4:
+    with tab_pair:
         chosen = st.multiselect("Select up to 5 variables", list_vars, default=list_vars[: min(4, len(list_vars))])
         if 2 <= len(chosen) <= 5:
             sample = num_df[chosen].sample(min(300, len(num_df)), random_state=42)
@@ -159,6 +158,92 @@ if app_mode == "Visualization":
         else:
             st.info("Pick between 2 and 5 variables.")
 
+    with tab_pie:
+        cat_cols = ["Street_Type", "Furnishing", "Property_Type", "Has_Pool"]
+        fig, axes = plt.subplots(2, 2, figsize=(11, 9))
+        for ax, col in zip(axes.ravel(), cat_cols):
+            counts = df[col].value_counts()
+            ax.pie(
+                counts, labels=counts.index, autopct="%1.1f%%",
+                startangle=90, wedgeprops={"edgecolor": "white"},
+            )
+            ax.set_title(col)
+        fig.tight_layout()
+        st.pyplot(fig)
+
+    with tab_map:
+        st.markdown("Heatmap across the 8 cities in the dataset. **Red = high, green = low**, relative to the chosen metric.")
+
+        CITY_COORDS = {
+            "Delhi": (28.6139, 77.2090), "Gurugram": (28.4595, 77.0266),
+            "Noida": (28.5355, 77.3910), "Jaipur": (26.9124, 75.7873),
+            "Lucknow": (26.8467, 80.9462), "Kanpur": (26.4499, 80.3319),
+            "Prayagraj": (25.4358, 81.8463), "Indore": (22.7196, 75.8577),
+        }
+
+        metric = st.selectbox(
+            "Color the map by",
+            [
+                "Average price (most expensive)",
+                "Oldest homes (avg build year)",
+                "Largest homes (avg area)",
+                "Most rooms (avg rooms)",
+                "Number of listings",
+                "Share with a pool",
+            ],
+            key="map_metric",
+        )
+
+        g = df.groupby("Location")
+        if metric == "Average price (most expensive)":
+            val, hotter_high, fmt = g["Price"].mean(), True, lambda v: f"{v:,.0f}"
+        elif metric == "Oldest homes (avg build year)":
+            val, hotter_high, fmt = g["Build_Year"].mean(), False, lambda v: f"{v:.0f}"
+        elif metric == "Largest homes (avg area)":
+            val, hotter_high, fmt = g["Area_SqFt"].mean(), True, lambda v: f"{v:,.0f} sqft"
+        elif metric == "Most rooms (avg rooms)":
+            val, hotter_high, fmt = g["Rooms"].mean(), True, lambda v: f"{v:.1f}"
+        elif metric == "Number of listings":
+            val, hotter_high, fmt = g.size(), True, lambda v: f"{v:.0f}"
+        else:
+            val, hotter_high, fmt = g["Has_Pool"].apply(lambda s: (s == "Yes").mean()), True, lambda v: f"{v*100:.0f}%"
+
+        mp = pd.DataFrame({"Location": val.index, "value": val.values})
+        mp["lat"] = mp["Location"].map(lambda c: CITY_COORDS[c][0])
+        mp["lon"] = mp["Location"].map(lambda c: CITY_COORDS[c][1])
+        mp["display"] = mp["value"].map(fmt)
+
+        lo, hi = mp["value"].min(), mp["value"].max()
+        norm = (mp["value"] - lo) / (hi - lo) if hi > lo else pd.Series(0.5, index=mp.index)
+        if not hotter_high:
+            norm = 1 - norm
+        mp["weight"] = 0.15 + 0.85 * norm   # floor keeps the coolest city visible
+
+        COLOR_RANGE = [
+            [26, 152, 80], [145, 207, 96], [217, 239, 139],
+            [254, 224, 139], [252, 141, 89], [215, 48, 39],
+        ]
+
+        heat = pdk.Layer(
+            "HeatmapLayer", data=mp, get_position="[lon, lat]",
+            get_weight="weight", radius_pixels=90, intensity=1,
+            threshold=0.05, color_range=COLOR_RANGE,
+        )
+        dots = pdk.Layer(
+            "ScatterplotLayer", data=mp, get_position="[lon, lat]",
+            get_radius=12000, get_fill_color=[255, 255, 255, 40], pickable=True,
+        )
+
+        st.pydeck_chart(
+            pdk.Deck(
+                layers=[heat, dots],
+                initial_view_state=pdk.ViewState(latitude=26.8, longitude=78.5, zoom=4.3),
+                map_provider="carto",
+                map_style="light",
+                tooltip={"html": "<b>{Location}</b><br/>" + metric + ": {display}"},
+            )
+        )
+        st.caption("Coloring is relative within the selected metric (min = green, max = red), not an absolute scale.")
 
 if app_mode == "Prediction":
     st.title("Prediction")
