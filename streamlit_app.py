@@ -131,12 +131,14 @@ if app_mode == "Visualization":
         ["Correlation", "Distribution", "Scatter vs Price", "Pairplot", "Pie Charts", "Map"]
     )
 
+    # ---------- Correlation ----------
     with tab_corr:
         fig, ax = plt.subplots(figsize=(10, 8))
         sns.heatmap(num_df.corr(), annot=True, fmt=".2f", cmap="RdBu_r", center=0, ax=ax)
         ax.set_title("Correlation Matrix")
         st.pyplot(fig)
 
+    # ---------- Distribution ----------
     with tab_dist:
         var = st.selectbox("Select a variable", list_vars, key="dist_var")
         fig, ax = plt.subplots()
@@ -144,6 +146,7 @@ if app_mode == "Visualization":
         ax.set_title("Distribution of " + var)
         st.pyplot(fig)
 
+    # ---------- Scatter vs Price ----------
     with tab_scatter:
         feature = st.selectbox("Select a feature", [c for c in list_vars if c != "Price"], key="scatter_x")
         fig, ax = plt.subplots()
@@ -152,6 +155,7 @@ if app_mode == "Visualization":
         ax.set_title(feature + " vs Price")
         st.pyplot(fig)
 
+    # ---------- Pairplot ----------
     with tab_pair:
         chosen = st.multiselect("Select up to 5 variables", list_vars, default=list_vars[: min(4, len(list_vars))])
         if 2 <= len(chosen) <= 5:
@@ -160,6 +164,7 @@ if app_mode == "Visualization":
         else:
             st.info("Pick between 2 and 5 variables.")
 
+    # ---------- Pie Charts ----------
     with tab_pie:
         cat_cols = ["Street_Type", "Furnishing", "Property_Type", "Has_Pool"]
         fig, axes = plt.subplots(2, 2, figsize=(11, 9))
@@ -173,8 +178,9 @@ if app_mode == "Visualization":
         fig.tight_layout()
         st.pyplot(fig)
 
+    # ---------- Map ----------
     with tab_map:
-        st.markdown("Heatmap across the 8 cities in the dataset. **Red = high, green = low**, relative to the chosen metric.")
+        st.markdown("Every house in the dataset, scattered around its city. **Green = low, red = high** for the chosen metric.")
 
         CITY_COORDS = {
             "Delhi": (28.6139, 77.2090), "Gurugram": (28.4595, 77.0266),
@@ -182,70 +188,114 @@ if app_mode == "Visualization":
             "Lucknow": (26.8467, 80.9462), "Kanpur": (26.4499, 80.3319),
             "Prayagraj": (25.4358, 81.8463), "Indore": (22.7196, 75.8577),
         }
-
-        metric = st.selectbox(
-            "Color the map by",
-            [
-                "Average price (most expensive)",
-                "Oldest homes (avg build year)",
-                "Largest homes (avg area)",
-                "Most rooms (avg rooms)",
-                "Number of listings",
-                "Share with a pool",
-            ],
-            key="map_metric",
-        )
-
-        g = df.groupby("Location")
-        if metric == "Average price (most expensive)":
-            val, hotter_high, fmt = g["Price"].mean(), True, lambda v: f"{v:,.0f}"
-        elif metric == "Oldest homes (avg build year)":
-            val, hotter_high, fmt = g["Build_Year"].mean(), False, lambda v: f"{v:.0f}"
-        elif metric == "Largest homes (avg area)":
-            val, hotter_high, fmt = g["Area_SqFt"].mean(), True, lambda v: f"{v:,.0f} sqft"
-        elif metric == "Most rooms (avg rooms)":
-            val, hotter_high, fmt = g["Rooms"].mean(), True, lambda v: f"{v:.1f}"
-        elif metric == "Number of listings":
-            val, hotter_high, fmt = g.size(), True, lambda v: f"{v:.0f}"
-        else:
-            val, hotter_high, fmt = g["Has_Pool"].apply(lambda s: (s == "Yes").mean()), True, lambda v: f"{v*100:.0f}%"
-
-        mp = pd.DataFrame({"Location": val.index, "value": val.values})
-        mp["lat"] = mp["Location"].map(lambda c: CITY_COORDS[c][0])
-        mp["lon"] = mp["Location"].map(lambda c: CITY_COORDS[c][1])
-        mp["display"] = mp["value"].map(fmt)
-
-        lo, hi = mp["value"].min(), mp["value"].max()
-        norm = (mp["value"] - lo) / (hi - lo) if hi > lo else pd.Series(0.5, index=mp.index)
-        if not hotter_high:
-            norm = 1 - norm
-        mp["weight"] = 0.15 + 0.85 * norm   # floor keeps the coolest city visible
-
         COLOR_RANGE = [
             [26, 152, 80], [145, 207, 96], [217, 239, 139],
             [254, 224, 139], [252, 141, 89], [215, 48, 39],
         ]
 
-        heat = pdk.Layer(
-            "HeatmapLayer", data=mp, get_position="[lon, lat]",
-            get_weight="weight", radius_pixels=90, intensity=1,
-            threshold=0.05, color_range=COLOR_RANGE,
-        )
-        dots = pdk.Layer(
-            "ScatterplotLayer", data=mp, get_position="[lon, lat]",
-            get_radius=12000, get_fill_color=[255, 255, 255, 40], pickable=True,
-        )
+        def ramp(t):
+            t = max(0.0, min(1.0, float(t)))
+            x = t * (len(COLOR_RANGE) - 1)
+            i = int(min(x, len(COLOR_RANGE) - 2))
+            f = x - i
+            a, b = COLOR_RANGE[i], COLOR_RANGE[i + 1]
+            return [int(round(a[k] + (b[k] - a[k]) * f)) for k in range(3)]
 
-        st.pydeck_chart(
-            pdk.Deck(
-                layers=[heat, dots],
-                initial_view_state=pdk.ViewState(latitude=26.8, longitude=78.5, zoom=4.3),
-                map_provider="carto",
-                map_style="light",
-                tooltip={"html": "<b>{Location}</b><br/>" + metric + ": {display}"},
-            )
+        c1, c2 = st.columns(2)
+        metric = c1.selectbox(
+            "Color by",
+            [
+                "Average price (most expensive)",
+                "Oldest homes (build year)",
+                "Largest homes (area)",
+                "Most rooms",
+                "Number of listings",
+                "Share with a pool",
+            ],
+            key="map_metric",
         )
-        st.caption("Coloring is relative within the selected metric (min = green, max = red), not an absolute scale.")
+        view_mode = c2.radio("View", ["Heatmap", "Individual houses"], horizontal=True, key="map_view")
+
+        g = df.groupby("Location")
+        if metric == "Average price (most expensive)":
+            row_val, hotter_high, fmt = df["Price"], True, lambda v: f"{v:,.0f}"
+        elif metric == "Oldest homes (build year)":
+            row_val, hotter_high, fmt = df["Build_Year"], False, lambda v: f"{v:.0f}"
+        elif metric == "Largest homes (area)":
+            row_val, hotter_high, fmt = df["Area_SqFt"], True, lambda v: f"{v:,.0f} sqft"
+        elif metric == "Most rooms":
+            row_val, hotter_high, fmt = df["Rooms"], True, lambda v: f"{v:.1f}"
+        elif metric == "Number of listings":
+            row_val, hotter_high, fmt = df["Location"].map(g.size()), True, lambda v: f"{v:.0f}"
+        else:  # Share with a pool
+            share = g["Has_Pool"].apply(lambda s: (s == "Yes").mean())
+            row_val, hotter_high, fmt = df["Location"].map(share), True, lambda v: f"{v*100:.0f}%"
+
+        rng = np.random.default_rng(42)
+        pts = pd.DataFrame({
+            "Location": df["Location"].values,
+            "value": row_val.values,
+            "Price": df["Price"].round().astype(int).values,
+            "Area_SqFt": df["Area_SqFt"].round().astype(int).values,
+            "Rooms": df["Rooms"].astype(int).values,
+            "Build_Year": df["Build_Year"].values,
+            "Property_Type": df["Property_Type"].values,
+            "Has_Pool": df["Has_Pool"].values,
+        })
+        pts["lat"] = [CITY_COORDS[c][0] for c in df["Location"]] + rng.normal(0, 0.05, len(df))
+        pts["lon"] = [CITY_COORDS[c][1] for c in df["Location"]] + rng.normal(0, 0.05, len(df))
+
+        lo, hi = pts["value"].min(), pts["value"].max()
+        norm = (pts["value"] - lo) / (hi - lo) if hi > lo else pd.Series(0.5, index=pts.index)
+        if not hotter_high:
+            norm = 1 - norm
+        pts["weight"] = 0.15 + 0.85 * norm
+        cols = [ramp(t) for t in norm]
+        pts["r"] = [c[0] for c in cols]
+        pts["g"] = [c[1] for c in cols]
+        pts["b"] = [c[2] for c in cols]
+
+        if view_mode == "Heatmap":
+            layers = [pdk.Layer(
+                "HeatmapLayer", data=pts, get_position="[lon, lat]",
+                get_weight="weight", radius_pixels=60, intensity=1,
+                threshold=0.05, color_range=COLOR_RANGE,
+            )]
+            tooltip = {"html": "<b>{Location}</b>"}
+        else:
+            layers = [pdk.Layer(
+                "ScatterplotLayer", data=pts, get_position="[lon, lat]",
+                get_fill_color="[r, g, b, 180]", get_radius=3000,
+                radius_min_pixels=2, radius_max_pixels=6, pickable=True,
+            )]
+            tooltip = {"html": (
+                "<b>{Location}</b><br/>Price: {Price}<br/>Area: {Area_SqFt} sqft"
+                "<br/>Rooms: {Rooms}<br/>Built: {Build_Year}"
+                "<br/>Type: {Property_Type}<br/>Pool: {Has_Pool}"
+            )}
+
+        st.pydeck_chart(pdk.Deck(
+            layers=layers,
+            initial_view_state=pdk.ViewState(latitude=26.8, longitude=78.5, zoom=4.3),
+            map_provider="carto", map_style="light", tooltip=tooltip,
+        ))
+
+        # color scale legend
+        left_lab, right_lab = (fmt(lo), fmt(hi)) if hotter_high else (fmt(hi), fmt(lo))
+        gradient = ", ".join(f"rgb({r},{g},{b})" for r, g, b in COLOR_RANGE)
+        st.markdown(
+            f"""
+            <div style="margin-top:8px;">
+              <div style="height:18px;border-radius:4px;
+                          background:linear-gradient(to right,{gradient});"></div>
+              <div style="display:flex;justify-content:space-between;
+                          font-size:0.8rem;margin-top:2px;">
+                <span>{left_lab}</span><span>{metric}</span><span>{right_lab}</span>
+              </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
 if app_mode == "Prediction":
     st.title("Prediction")
