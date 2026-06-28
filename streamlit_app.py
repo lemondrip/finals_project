@@ -133,41 +133,42 @@ if app_mode == "Visualization":
 
     # ---------- Correlation ----------
     with tab_corr:
-        fig, ax = plt.subplots(figsize=(10, 8))
+        fig, ax = plt.subplots(figsize=(7, 5.5))
         sns.heatmap(num_df.corr(), annot=True, fmt=".2f", cmap="RdBu_r", center=0, ax=ax)
         ax.set_title("Correlation Matrix")
-        st.pyplot(fig)
+        st.pyplot(fig, use_container_width=False)
 
     # ---------- Distribution ----------
     with tab_dist:
         var = st.selectbox("Select a variable", list_vars, key="dist_var")
-        fig, ax = plt.subplots()
+        fig, ax = plt.subplots(figsize=(6, 4))
         sns.histplot(df[var], kde=True, ax=ax)
         ax.set_title("Distribution of " + var)
-        st.pyplot(fig)
+        st.pyplot(fig, use_container_width=False)
 
     # ---------- Scatter vs Price ----------
     with tab_scatter:
         feature = st.selectbox("Select a feature", [c for c in list_vars if c != "Price"], key="scatter_x")
-        fig, ax = plt.subplots()
+        fig, ax = plt.subplots(figsize=(6, 4))
         sns.scatterplot(data=df, x=feature, y="Price", ax=ax)
         sns.regplot(data=df, x=feature, y="Price", scatter=False, color="red", ax=ax)
         ax.set_title(feature + " vs Price")
-        st.pyplot(fig)
+        st.pyplot(fig, use_container_width=False)
 
     # ---------- Pairplot ----------
     with tab_pair:
         chosen = st.multiselect("Select up to 5 variables", list_vars, default=list_vars[: min(4, len(list_vars))])
         if 2 <= len(chosen) <= 5:
             sample = num_df[chosen].sample(min(300, len(num_df)), random_state=42)
-            st.pyplot(sns.pairplot(sample))
+            grid = sns.pairplot(sample, height=1.6)
+            st.pyplot(grid.fig, use_container_width=False)
         else:
             st.info("Pick between 2 and 5 variables.")
 
     # ---------- Pie Charts ----------
     with tab_pie:
         cat_cols = ["Street_Type", "Furnishing", "Property_Type", "Has_Pool"]
-        fig, axes = plt.subplots(2, 2, figsize=(11, 9))
+        fig, axes = plt.subplots(2, 2, figsize=(7, 6))
         for ax, col in zip(axes.ravel(), cat_cols):
             counts = df[col].value_counts()
             ax.pie(
@@ -176,7 +177,7 @@ if app_mode == "Visualization":
             )
             ax.set_title(col)
         fig.tight_layout()
-        st.pyplot(fig)
+        st.pyplot(fig, use_container_width=False)
 
     # ---------- Map ----------
     with tab_map:
@@ -193,16 +194,7 @@ if app_mode == "Visualization":
             [254, 224, 139], [252, 141, 89], [215, 48, 39],
         ]
 
-        def ramp(t):
-            t = max(0.0, min(1.0, float(t)))
-            x = t * (len(COLOR_RANGE) - 1)
-            i = int(min(x, len(COLOR_RANGE) - 2))
-            f = x - i
-            a, b = COLOR_RANGE[i], COLOR_RANGE[i + 1]
-            return [int(round(a[k] + (b[k] - a[k]) * f)) for k in range(3)]
-
-        c1, c2 = st.columns(2)
-        metric = c1.selectbox(
+        metric = st.selectbox(
             "Color by",
             [
                 "Average price (most expensive)",
@@ -214,7 +206,6 @@ if app_mode == "Visualization":
             ],
             key="map_metric",
         )
-        view_mode = c2.radio("View", ["Heatmap", "Individual houses"], horizontal=True, key="map_view")
 
         g = df.groupby("Location")
         if metric == "Average price (most expensive)":
@@ -235,12 +226,6 @@ if app_mode == "Visualization":
         pts = pd.DataFrame({
             "Location": df["Location"].values,
             "value": row_val.values,
-            "Price": df["Price"].round().astype(int).values,
-            "Area_SqFt": df["Area_SqFt"].round().astype(int).values,
-            "Rooms": df["Rooms"].astype(int).values,
-            "Build_Year": df["Build_Year"].values,
-            "Property_Type": df["Property_Type"].values,
-            "Has_Pool": df["Has_Pool"].values,
         })
         pts["lat"] = [CITY_COORDS[c][0] for c in df["Location"]] + rng.normal(0, 0.05, len(df))
         pts["lon"] = [CITY_COORDS[c][1] for c in df["Location"]] + rng.normal(0, 0.05, len(df))
@@ -250,34 +235,17 @@ if app_mode == "Visualization":
         if not hotter_high:
             norm = 1 - norm
         pts["weight"] = 0.15 + 0.85 * norm
-        cols = [ramp(t) for t in norm]
-        pts["r"] = [c[0] for c in cols]
-        pts["g"] = [c[1] for c in cols]
-        pts["b"] = [c[2] for c in cols]
 
-        if view_mode == "Heatmap":
-            layers = [pdk.Layer(
-                "HeatmapLayer", data=pts, get_position="[lon, lat]",
-                get_weight="weight", radius_pixels=60, intensity=1,
-                threshold=0.05, color_range=COLOR_RANGE,
-            )]
-            tooltip = {"html": "<b>{Location}</b>"}
-        else:
-            layers = [pdk.Layer(
-                "ScatterplotLayer", data=pts, get_position="[lon, lat]",
-                get_fill_color="[r, g, b, 180]", get_radius=3000,
-                radius_min_pixels=2, radius_max_pixels=6, pickable=True,
-            )]
-            tooltip = {"html": (
-                "<b>{Location}</b><br/>Price: {Price}<br/>Area: {Area_SqFt} sqft"
-                "<br/>Rooms: {Rooms}<br/>Built: {Build_Year}"
-                "<br/>Type: {Property_Type}<br/>Pool: {Has_Pool}"
-            )}
+        heat = pdk.Layer(
+            "HeatmapLayer", data=pts, get_position="[lon, lat]",
+            get_weight="weight", radius_pixels=60, intensity=1,
+            threshold=0.05, color_range=COLOR_RANGE,
+        )
 
         st.pydeck_chart(pdk.Deck(
-            layers=layers,
+            layers=[heat],
             initial_view_state=pdk.ViewState(latitude=26.8, longitude=78.5, zoom=4.3),
-            map_provider="carto", map_style="light", tooltip=tooltip,
+            map_provider="carto", map_style="light",
         ))
 
         # color scale legend
