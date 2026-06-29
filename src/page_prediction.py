@@ -3,21 +3,12 @@ House Price Prediction Page
 ===========================
 Streamlit prediction/model page for the group project.
 
-Goal: predict house prices from property characteristics using at least two
-Scikit-Learn regression models. The page trains the models, compares their
-performance, lets the user switch between models, and provides a what-if house
-price predictor.
+Goal: predict house prices from property characteristics using Scikit-Learn regression models. 
+The page trains the models, compares their performance, lets the user switch between models,
+and provides a what-if house price predictor.
 
-How to use in your app:
-1. Put this file in your Streamlit project, usually inside the `src/` folder.
-2. Put `dataset_2.csv` in the project root, `src/`, or a `data/` folder.
-3. Import and call `render()` from your main Streamlit app.
 
-Example:
-    import page_prediction_house_prices
-    page_prediction_house_prices.render()
 
-If you want it to replace your old page, rename this file to `page_prediction.py`.
 """
 
 from __future__ import annotations
