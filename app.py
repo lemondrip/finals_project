@@ -22,19 +22,17 @@ from src import (
     page_prediction,
     page_explainability,
     page_tuning,
-    page_conclusion,
 )
 
 PAGES = {
-    "Introduction":       page_intro,
-    "Visualization":      page_visualization,
-    "Prediction":         page_prediction,
-    "Feature Importance": page_explainability,
-    "W&B Tracking":       page_tuning,
-    "Conclusion":         page_conclusion,
+    "Business Case & Data":  page_intro,
+    "Data Visualization":    page_visualization,
+    "Model Prediction":      page_prediction,
+    "Explainability (SHAP)": page_explainability,
+    "Hyperparameter Tuning": page_tuning,
 }
 
-st.sidebar.title("🏡 Housing Price Prediction")
+st.sidebar.title("Housing Price Prediction")
 choice = st.sidebar.radio("Navigate", list(PAGES.keys()), label_visibility="collapsed")
 
 module = PAGES[choice]
