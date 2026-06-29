@@ -176,7 +176,7 @@ def render() -> None:
     )
  
  
-[10:32 PM]# ── 3. Dependence ─────────────────────────────────────────────────
+# ── 3. Dependence ─────────────────────────────────────────────────
     _section("3. Dependence — how one feature bends price",
              "Raw (transformed) feature value vs its SHAP impact reveals non-linear effects.")
     # Default to the most important feature for an immediately interesting plot.
