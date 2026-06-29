@@ -5,3 +5,4 @@ plotly
 pydeck
 matplotlib
 scikit-learn
+shap
