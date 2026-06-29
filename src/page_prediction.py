@@ -197,8 +197,8 @@ def render() -> None:
 
     # ── Model selection ─────────────────────────────────────────────
     _section(
-        "2. Train at least two models",
-        "This satisfies the project requirement that users can switch between two or more models.",
+        "2. Prediction Models",
+        "There are 4 models: Linear Regression, Ridge Regression, Random Forest, Gradient Boosting. Choose at least 2 for comparison.",
     )
 
     all_model_names = list(_available_models().keys())
