@@ -63,98 +63,94 @@ def _section(title: str, description: str | None = None) -> None:
 # -----------------------------------------------------------------------------
 # Data loading and preparation
 # -----------------------------------------------------------------------------
-def _candidate_data_paths() -> List[Path]:
-    """Search common locations for dataset_2.csv so the file is easy to move."""
-    candidates: List[Path] = []
-
-    try:
-        here = Path(__file__).resolve().parent
-        candidates.extend(
-            [
-                here / "dataset_2.csv",
-                here.parent / "dataset_2.csv",
-                here / "data" / "dataset_2.csv",
-                here.parent / "data" / "dataset_2.csv",
-                here.parent.parent / "dataset_2.csv",
-            ]
-        )
-    except NameError:
-        pass
-
-    cwd = Path.cwd()
-    candidates.extend(
-        [
-            cwd / "dataset_2.csv",
-            cwd / "data" / "dataset_2.csv",
-            cwd / "src" / "dataset_2.csv",
-        ]
-    )
-
-    # Remove duplicates while preserving order.
-    unique: List[Path] = []
-    seen = set()
-    for path in candidates:
-        if path not in seen:
-            unique.append(path)
-            seen.add(path)
-    return unique
-
-
-def _find_data_path() -> Path | None:
-    for path in _candidate_data_paths():
-        if path.exists():
-            return path
-    return None
-
 
 @st.cache_data(show_spinner=False)
-def load_data_from_path(path: str) -> pd.DataFrame:
-    """Load and lightly clean the house price dataset."""
-    df = pd.read_csv(path)
+def load_data() -> pd.DataFrame:
+    """
+    Load and prepare the housing dataset.
 
-    required = NUMERIC_BASE + CATEGORICAL_BASE + [TARGET]
-    missing = [col for col in required if col not in df.columns]
-    if missing:
-        raise ValueError(f"Missing required columns in dataset: {missing}")
+    page_prediction.py is inside the src folder.
+    dataset_2.csv is in the main project folder.
+    """
+    data_path = Path(__file__).resolve().parent.parent / "dataset_2.csv"
 
-    # Clean numeric columns.
-    for col in NUMERIC_BASE + [TARGET]:
+    df = pd.read_csv(data_path)
+
+    # Remove duplicate rows
+    df = df.drop_duplicates()
+
+    # Make sure required columns exist
+    required_columns = [
+        "Area_SqFt",
+        "Rooms",
+        "Build_Year",
+        "Location",
+        "Street_Type",
+        "Furnishing",
+        "Property_Type",
+        "Has_Pool",
+        "Price",
+    ]
+
+    missing_columns = [col for col in required_columns if col not in df.columns]
+
+    if missing_columns:
+        st.error(f"Missing columns in dataset: {missing_columns}")
+        st.stop()
+
+    # Convert numeric columns
+    numeric_columns = ["Area_SqFt", "Rooms", "Build_Year", "Price"]
+
+    for col in numeric_columns:
         df[col] = pd.to_numeric(df[col], errors="coerce")
 
-    # Drop rows with no target. Keep feature missing values because the pipeline
-    # imputes them during training.
-    df = df.dropna(subset=[TARGET]).copy()
-    df = df[df[TARGET] > 0].copy()
+    # Drop rows where the target price is missing or invalid
+    df = df.dropna(subset=["Price"])
+    df = df[df["Price"] > 0]
 
-    # Standardize categorical missing values.
-    for col in CATEGORICAL_BASE:
-        df[col] = df[col].astype("object").fillna("Unknown")
+    # Fill missing numeric values with median
+    for col in ["Area_SqFt", "Rooms", "Build_Year"]:
+        df[col] = df[col].fillna(df[col].median())
 
-    return _add_engineered_features(df)
+    # Fill missing categorical values with "Unknown"
+    categorical_columns = [
+        "Location",
+        "Street_Type",
+        "Furnishing",
+        "Property_Type",
+        "Has_Pool",
+    ]
 
+    for col in categorical_columns:
+        df[col] = df[col].fillna("Unknown").astype(str)
 
-def _add_engineered_features(df: pd.DataFrame) -> pd.DataFrame:
-    """Add simple features that are useful for price prediction."""
-    out = df.copy()
-
-    current_year = pd.Timestamp.today().year
-    out["House_Age"] = current_year - pd.to_numeric(out["Build_Year"], errors="coerce")
-    out["Area_Per_Room"] = (
-        pd.to_numeric(out["Area_SqFt"], errors="coerce")
-        / pd.to_numeric(out["Rooms"], errors="coerce").replace(0, np.nan)
-    )
-    out["Pool_Flag"] = (
-        out["Has_Pool"].astype(str).str.strip().str.lower().eq("yes").astype(int)
-    )
-
-    return out
+    return df
 
 
-def _split_features_target(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.Series, List[str], List[str]]:
-    numeric_features = [c for c in NUMERIC_BASE + ENGINEERED_NUMERIC if c in df.columns]
-    categorical_features = [c for c in CATEGORICAL_BASE if c in df.columns]
-    X = df[numeric_features + categorical_features].copy()
-    y = df[TARGET].copy()
+def split_features_target(df: pd.DataFrame):
+    """
+    Split the dataframe into input features X and target variable y.
+    """
+
+    target = "Price"
+
+    numeric_features = [
+        "Area_SqFt",
+        "Rooms",
+        "Build_Year",
+    ]
+
+    categorical_features = [
+        "Location",
+        "Street_Type",
+        "Furnishing",
+        "Property_Type",
+        "Has_Pool",
+    ]
+
+    X = df[numeric_features + categorical_features]
+    y = df[target]
+
     return X, y, numeric_features, categorical_features
 
 
