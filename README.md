@@ -1,25 +1,29 @@
-# 🎈 Blank app template
+---
+title: Housing Price Prediction
+emoji: 🏡
+colorFrom: purple
+colorTo: indigo
+sdk: docker
+app_port: 8501
+pinned: false
+license: apache-2.0
+---
 
-A simple Streamlit app template for you to modify!
+# 🏡 Housing Price Prediction
 
-[![Open in Streamlit](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://blank-app-template.streamlit.app/)
+A multi-page Streamlit app that predicts housing prices using linear regression and tree-based models, with data exploration, visualization, explainability (SHAP), and hyperparameter tuning.
 
-### How to run it on your own machine
+Built for DS-UA 9111 — Data Science for Everyone.
 
-Prerequisite: install `uv` if you don't already have it.
+## Pages
 
-```
-$ curl -LsSf https://astral.sh/uv/install.sh | sh
-```
+- Introduction — business case and data presentation
+- Visualization — exploratory charts
+- Prediction — model training and comparison
+- Feature Importance — explainability
+- W&B Tracking — hyperparameter tuning
+- Conclusion
 
-1. Sync the dependencies
+## Run locally
 
-   ```
-   $ uv sync
-   ```
-
-2. Run the app
-
-   ```
-   $ uv run streamlit run streamlit_app.py
-   ```
+Install dependencies with `pip install -r requirements.txt`, then run `streamlit run app.py`.
