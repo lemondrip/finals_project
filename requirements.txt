@@ -6,3 +6,6 @@ pydeck
 matplotlib
 scikit-learn
 shap
+optuna
+wandb
+python-dotenv
