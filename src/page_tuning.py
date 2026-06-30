@@ -1,13 +1,15 @@
 """
 Page 5 — Hyperparameter Tuning
 ================================
-Automated hyperparameter optimization using Optuna,
-with experiment tracking (Weights & Biases) and visualization.
+Automated hyperparameter optimization using Optuna, with W&B experiment
+tracking and visualization.
 
-Mirrors the data handling of the Prediction page: features arrive already
-numeric from data_loader, are used as `df[features].values`, and are optionally
-standardized — so the hyperparameters found here describe the same model the
-Prediction page trains.
+Based on the course template's tuning page, with two adaptations so it
+runs on this project's data:
+  • categorical columns are one-hot encoded (the template assumed every
+    feature was numeric — df[features].values would crash on strings);
+  • models learn on log(price) and predictions are inverted with expm1,
+    so the large, right-skewed prices don't break the neural network.
 """
 
 import streamlit as st
@@ -17,148 +19,29 @@ import plotly.express as px
 import plotly.graph_objects as go
 from sklearn.model_selection import train_test_split, cross_val_score
 from sklearn.preprocessing import StandardScaler
-from sklearn.linear_model import Ridge, Lasso, ElasticNet
-from sklearn.tree import DecisionTreeRegressor
 from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
+from sklearn.linear_model import Ridge, Lasso, ElasticNet
 from sklearn.neural_network import MLPRegressor
 from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
 from data_loader import dataset_selector, get_target, get_features
 from src import wandb_tracker
 
-RANDOM_STATE = 42
+# ──────────────────────────────────────────────────────────────────────
+#  WEIGHTS & BIASES API KEY  ── where you add your token
+#  ----------------------------------------------------------------------
+#  Do NOT put the key in this file (the repo is public on GitHub/HF).
+#  wandb_tracker reads it from the environment — add it as a SECRET:
+#     HF Space → Settings → Variables and secrets → New secret
+#        Name:  WANDB_API_KEY     Value: <key from https://wandb.ai/authorize>
+#     Local dev:  export WANDB_API_KEY=your_key   (before streamlit run)
+#  With no key set, tuning still runs — it just skips W&B logging.
+# ──────────────────────────────────────────────────────────────────────
 
-# Tunable models — names kept consistent with the Prediction page.
-TUNABLE_MODELS = [
-    "🧠 MLP (Neural Net)",
-    "Ridge Regression",
-    "Lasso Regression",
-    "Elastic Net",
-    "Decision Tree",
-    "Random Forest",
-    "Gradient Boosting",
-]
+TEAL = "#0D9488"
+TEAL_BRIGHT = "#2DD4BF"
 
-# Human-readable search spaces (for the summary table).
-SEARCH_SPACES = {
-    "🧠 MLP (Neural Net)": {
-        "n_hidden_layers": "1 — 4",
-        "neurons_per_layer": "16 — 256",
-        "activation": "relu, tanh, logistic",
-        "learning_rate_init": "0.0001 — 0.01",
-        "alpha (L2 penalty)": "0.0001 — 0.1",
-        "batch_size": "16 — 128",
-        "max_iter": "200 — 1000",
-    },
-    "Ridge Regression": {"alpha": "0.001 — 100"},
-    "Lasso Regression": {"alpha": "0.001 — 100"},
-    "Elastic Net": {"alpha": "0.001 — 100", "l1_ratio": "0.0 — 1.0"},
-    "Decision Tree": {
-        "max_depth": "2 — 30",
-        "min_samples_split": "2 — 20",
-        "min_samples_leaf": "1 — 10",
-        "max_features": "sqrt, log2, None",
-    },
-    "Random Forest": {
-        "n_estimators": "50 — 500",
-        "max_depth": "3 — 30",
-        "min_samples_split": "2 — 20",
-        "min_samples_leaf": "1 — 10",
-        "max_features": "sqrt, log2, None",
-    },
-    "Gradient Boosting": {
-        "n_estimators": "50 — 500",
-        "max_depth": "2 — 10",
-        "learning_rate": "0.01 — 0.3",
-        "subsample": "0.6 — 1.0",
-        "min_samples_split": "2 — 20",
-    },
-}
-
-
-def _build_estimator(model_name: str, trial):
-    """Construct the sklearn estimator for this trial's sampled hyperparameters."""
-    if model_name == "🧠 MLP (Neural Net)":
-        n_layers = trial.suggest_int("n_hidden_layers", 1, 4)
-        hidden_layers = tuple(
-            trial.suggest_int(f"neurons_layer_{i}", 16, 256, log=True)
-            for i in range(n_layers)
-        )
-        return MLPRegressor(
-            hidden_layer_sizes=hidden_layers,
-            activation=trial.suggest_categorical("activation", ["relu", "tanh", "logistic"]),
-            learning_rate_init=trial.suggest_float("learning_rate_init", 1e-4, 1e-2, log=True),
-            alpha=trial.suggest_float("alpha", 1e-4, 0.1, log=True),
-            batch_size=trial.suggest_int("batch_size", 16, 128, log=True),
-            max_iter=trial.suggest_int("max_iter", 200, 1000, step=100),
-            random_state=RANDOM_STATE,
-            early_stopping=True,
-            validation_fraction=0.1,
-        )
-    if model_name == "Ridge Regression":
-        return Ridge(alpha=trial.suggest_float("alpha", 0.001, 100, log=True))
-    if model_name == "Lasso Regression":
-        return Lasso(alpha=trial.suggest_float("alpha", 0.001, 100, log=True))
-    if model_name == "Elastic Net":
-        return ElasticNet(
-            alpha=trial.suggest_float("alpha", 0.001, 100, log=True),
-            l1_ratio=trial.suggest_float("l1_ratio", 0.0, 1.0),
-        )
-    if model_name == "Decision Tree":
-        return DecisionTreeRegressor(
-            max_depth=trial.suggest_int("max_depth", 2, 30),
-            min_samples_split=trial.suggest_int("min_samples_split", 2, 20),
-            min_samples_leaf=trial.suggest_int("min_samples_leaf", 1, 10),
-            max_features=trial.suggest_categorical("max_features", ["sqrt", "log2", None]),
-            random_state=RANDOM_STATE,
-        )
-    if model_name == "Random Forest":
-        return RandomForestRegressor(
-            n_estimators=trial.suggest_int("n_estimators", 50, 500),
-            max_depth=trial.suggest_int("max_depth", 3, 30),
-            min_samples_split=trial.suggest_int("min_samples_split", 2, 20),
-            min_samples_leaf=trial.suggest_int("min_samples_leaf", 1, 10),
-            max_features=trial.suggest_categorical("max_features", ["sqrt", "log2", None]),
-            random_state=RANDOM_STATE, n_jobs=-1,
-        )
-    # Gradient Boosting
-    return GradientBoostingRegressor(
-        n_estimators=trial.suggest_int("n_estimators", 50, 500),
-        max_depth=trial.suggest_int("max_depth", 2, 10),
-        learning_rate=trial.suggest_float("learning_rate", 0.01, 0.3, log=True),
-        subsample=trial.suggest_float("subsample", 0.6, 1.0),
-        min_samples_split=trial.suggest_int("min_samples_split", 2, 20),
-        random_state=RANDOM_STATE,
-    )
-
-
-def _rebuild_best(model_name: str, params: dict):
-    """Rebuild the winning estimator from study.best_params and return
-    (estimator, display_params) ready for a final fit/predict."""
-    params = dict(params)
-    if model_name == "🧠 MLP (Neural Net)":
-        n_layers = params.pop("n_hidden_layers")
-        hidden_layers = tuple(params.pop(f"neurons_layer_{i}") for i in range(n_layers))
-        for k in list(params.keys()):
-            if k.startswith("neurons_layer_"):
-                params.pop(k)
-        est = MLPRegressor(
-            hidden_layer_sizes=hidden_layers, **params,
-            random_state=RANDOM_STATE, early_stopping=True, validation_fraction=0.1,
-        )
-        display = dict(params)
-        display["architecture"] = " → ".join(str(n) for n in hidden_layers)
-        return est, display
-    if model_name == "Ridge Regression":
-        return Ridge(**params), params
-    if model_name == "Lasso Regression":
-        return Lasso(**params), params
-    if model_name == "Elastic Net":
-        return ElasticNet(**params), params
-    if model_name == "Decision Tree":
-        return DecisionTreeRegressor(**params, random_state=RANDOM_STATE), params
-    if model_name == "Random Forest":
-        return RandomForestRegressor(**params, random_state=RANDOM_STATE, n_jobs=-1), params
-    return GradientBoostingRegressor(**params, random_state=RANDOM_STATE), params
+# Models that need scaled inputs (linear + neural net); trees use raw.
+_SCALED_MODELS = {"🧠 MLP (Neural Network)", "Ridge", "Lasso", "Elastic Net"}
 
 
 def render():
@@ -168,79 +51,97 @@ def render():
 
     st.markdown("## ⚙️ Hyperparameter Tuning")
     st.caption(
-        "Optimize model hyperparameters with Optuna and track every experiment. "
+        "Optimize model hyperparameters using Optuna and track all experiments. "
         "This replaces manual trial-and-error with automated Bayesian search."
     )
     st.markdown("---")
 
+    # ── Data prep (one-hot categoricals + log-price target) ─────────
+    X_raw = df[features]
+    cat_cols = X_raw.select_dtypes(exclude="number").columns.tolist()
+    X_df = pd.get_dummies(X_raw, columns=cat_cols) if cat_cols else X_raw.copy()
+    X = X_df.values
+    y = df[target].values
+    y_log = np.log1p(y)  # learn on log-price; invert with expm1 for $ metrics
+
+    X_train, X_test, y_train, y_test, y_train_log, y_test_log = train_test_split(
+        X, y, y_log, test_size=0.2, random_state=42
+    )
+    scaler = StandardScaler()
+    X_train_s = scaler.fit_transform(X_train)
+    X_test_s = scaler.transform(X_test)
+
     # ── Config ──────────────────────────────────────────────────────
     col1, col2, col3 = st.columns(3)
     with col1:
-        model_name = st.selectbox("Model to tune", TUNABLE_MODELS)
+        model_name = st.selectbox(
+            "Model to tune",
+            ["🧠 MLP (Neural Network)", "Random Forest", "Gradient Boosting", "Ridge", "Lasso", "Elastic Net"],
+        )
     with col2:
-        n_trials = st.slider("Number of trials", 5, 100, 20, step=5)
+        n_trials = st.slider("Number of trials", 5, 100, 15, step=5)
     with col3:
         cv_folds = st.slider("CV folds", 3, 10, 5)
 
-    col_f, col_s = st.columns([3, 1])
-    with col_f:
-        selected_features = st.multiselect(
-            "Explanatory variables", features, default=features,
-        )
-    with col_s:
-        test_size = st.slider("Test size (%)", 10, 40, 20) / 100
-        scale_data = st.checkbox("Standardize features", value=True)
-
-    if not selected_features:
-        st.warning("Please select at least one feature.")
-        return
-
-    # ── Prepare data (mirrors the Prediction page) ──────────────────
-    X = df[selected_features].values
-    y = df[target].values
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=test_size, random_state=RANDOM_STATE
-    )
-    if scale_data:
-        scaler = StandardScaler()
-        X_train = scaler.fit_transform(X_train)
-        X_test = scaler.transform(X_test)
-
-    st.markdown(
-        f"**Training set:** {len(X_train):,} samples · "
-        f"**Test set:** {len(X_test):,} samples · "
-        f"**Features:** {len(selected_features)}"
-    )
-
-    # ── Search space ────────────────────────────────────────────────
+    # ── Hyperparameter search spaces ────────────────────────────────
     st.markdown("### 🔧 Search Space")
-    space_df = pd.DataFrame(
-        [{"Parameter": k, "Range": v} for k, v in SEARCH_SPACES[model_name].items()]
-    )
-    st.dataframe(space_df, use_container_width=True, hide_index=True)
+    search_spaces = {
+        "🧠 MLP (Neural Network)": {
+            "n_hidden_layers": "1 — 4",
+            "neurons_per_layer": "16 — 256",
+            "activation": "relu, tanh, logistic",
+            "learning_rate_init": "0.0001 — 0.01",
+            "alpha (L2 penalty)": "0.0001 — 0.1",
+            "batch_size": "16 — 128",
+            "max_iter": "200 — 1000",
+        },
+        "Random Forest": {
+            "n_estimators": "50 — 500",
+            "max_depth": "3 — 30",
+            "min_samples_split": "2 — 20",
+            "min_samples_leaf": "1 — 10",
+        },
+        "Gradient Boosting": {
+            "n_estimators": "50 — 500",
+            "max_depth": "2 — 10",
+            "learning_rate": "0.01 — 0.3",
+            "subsample": "0.6 — 1.0",
+            "min_samples_split": "2 — 20",
+        },
+        "Ridge": {"alpha": "0.001 — 100"},
+        "Lasso": {"alpha": "0.001 — 100"},
+        "Elastic Net": {"alpha": "0.001 — 100", "l1_ratio": "0.0 — 1.0"},
+    }
 
-    # ── MLP architecture preview ────────────────────────────────────
-    if model_name == "🧠 MLP (Neural Net)":
+    # ── MLP architecture visualizer ─────────────────────────────────
+    if model_name == "🧠 MLP (Neural Network)":
         st.markdown("### 🏗️ Neural Network Architecture Preview")
         st.markdown(
-            "The MLP is a fully-connected feedforward network. Optuna searches over "
-            "the number of hidden layers, neurons per layer, activation, learning rate, "
-            "regularization, and batch size."
+            "The MLP (Multi-Layer Perceptron) is a fully-connected feedforward "
+            "neural network. Optuna will search over the number of hidden layers, "
+            "neurons per layer, activation function, learning rate, and regularization."
         )
         st.markdown(
             "```\n"
             "Input Layer ──▶ Hidden Layer(s) ──▶ Output Layer\n"
-            "  (features)    (relu/tanh/logistic)   (prediction)\n"
+            "  (features)    (relu/tanh/logistic)   (log-price)\n"
             "```"
         )
+
+    space_df = pd.DataFrame(
+        [{"Parameter": k, "Range": v} for k, v in search_spaces[model_name].items()]
+    )
+    st.dataframe(space_df, use_container_width=True, hide_index=True)
 
     # ── W&B toggle ──────────────────────────────────────────────────
     track_wandb = st.checkbox(
         "📡 Log study to Weights & Biases",
         value=wandb_tracker.is_available(),
         disabled=not wandb_tracker.is_available(),
-        help="Set WANDB_API_KEY in .env to enable.",
+        help="Set WANDB_API_KEY as a Space secret to enable.",
     )
+    if not wandb_tracker.is_available():
+        st.caption("📡 W&B is off — add `wandb` to requirements.txt and set `WANDB_API_KEY` as a Space secret.")
 
     # ── Run optimization ────────────────────────────────────────────
     if st.button("🚀 Start Optimization", type="primary", use_container_width=True):
@@ -248,7 +149,7 @@ def render():
             import optuna
             optuna.logging.set_verbosity(optuna.logging.WARNING)
         except ImportError:
-            st.error("Install Optuna: `pip install optuna`")
+            st.error("Install Optuna: add `optuna` to requirements.txt")
             return
 
         wb_run = None
@@ -258,19 +159,253 @@ def render():
                 config={
                     "dataset": ds_key,
                     "model": model_name,
-                    "target": target,
-                    "n_features": len(selected_features),
-                    "features": selected_features,
                     "n_trials": n_trials,
                     "cv_folds": cv_folds,
-                    "test_size": test_size,
-                    "scale_data": scale_data,
+                    "target": target,
+                    "n_features": int(X.shape[1]),
                 },
                 job_type="hparam-search",
             )
 
+        scaled = model_name in _SCALED_MODELS
+        X_obj = X_train_s if scaled else X_train
+
         def objective(trial):
-            model = _build_estimator(model_name, trial)
-            scores = cross_val_score(model, X_train, y_train, cv=cv_folds, scoring="r2")
+            if model_name == "🧠 MLP (Neural Network)":
+                n_layers = trial.suggest_int("n_hidden_layers", 1, 4)
+                hidden_layers = tuple(
+                    trial.suggest_int(f"neurons_layer_{i}", 16, 256, log=True)
+                    for i in range(n_layers)
+                )
+                model = MLPRegressor(
+                    hidden_layer_sizes=hidden_layers,
+                    activation=trial.suggest_categorical("activation", ["relu", "tanh", "logistic"]),
+                    learning_rate_init=trial.suggest_float("learning_rate_init", 1e-4, 1e-2, log=True),
+                    alpha=trial.suggest_float("alpha", 1e-4, 0.1, log=True),
+                    batch_size=trial.suggest_int("batch_size", 16, 128, log=True),
+                    max_iter=trial.suggest_int("max_iter", 200, 1000, step=100),
+                    random_state=42, early_stopping=True, validation_fraction=0.1,
+                )
+            elif model_name == "Random Forest":
+                model = RandomForestRegressor(
+                    n_estimators=trial.suggest_int("n_estimators", 50, 500),
+                    max_depth=trial.suggest_int("max_depth", 3, 30),
+                    min_samples_split=trial.suggest_int("min_samples_split", 2, 20),
+                    min_samples_leaf=trial.suggest_int("min_samples_leaf", 1, 10),
+                    random_state=42, n_jobs=-1,
+                )
+            elif model_name == "Gradient Boosting":
+                model = GradientBoostingRegressor(
+                    n_estimators=trial.suggest_int("n_estimators", 50, 500),
+                    max_depth=trial.suggest_int("max_depth", 2, 10),
+                    learning_rate=trial.suggest_float("learning_rate", 0.01, 0.3, log=True),
+                    subsample=trial.suggest_float("subsample", 0.6, 1.0),
+                    min_samples_split=trial.suggest_int("min_samples_split", 2, 20),
+                    random_state=42,
+                )
+            elif model_name == "Ridge":
+                model = Ridge(alpha=trial.suggest_float("alpha", 0.001, 100, log=True))
+            elif model_name == "Lasso":
+                model = Lasso(alpha=trial.suggest_float("alpha", 0.001, 100, log=True))
+            else:
+                model = ElasticNet(
+                    alpha=trial.suggest_float("alpha", 0.001, 100, log=True),
+                    l1_ratio=trial.suggest_float("l1_ratio", 0.0, 1.0),
+                )
+
+            scores = cross_val_score(model, X_obj, y_train_log, cv=cv_folds, scoring="r2")
             return scores.mean()
 
+        progress = st.progress(0, text="Optimizing...")
+        live_log = st.empty()
+        log_lines: list[str] = []
+        study = optuna.create_study(direction="maximize", study_name=model_name)
+
+        def callback(study, trial):
+            progress.progress(
+                (trial.number + 1) / n_trials,
+                text=f"Trial {trial.number + 1}/{n_trials} — Best R²: {study.best_value:.4f}",
+            )
+            score = trial.value if trial.value is not None else float("nan")
+            params_str = ", ".join(f"{k}={v}" for k, v in trial.params.items())
+            log_lines.append(
+                f"Trial {trial.number + 1:>3}/{n_trials} │ R²={score:.4f} │ best={study.best_value:.4f} │ {params_str}"
+            )
+            live_log.code("\n".join(log_lines[-15:]), language="text")
+            wandb_tracker.log_metrics(wb_run, {
+                "trial/r2": score if score == score else 0.0,
+                "trial/best_r2": study.best_value,
+            }, step=trial.number)
+
+        study.optimize(objective, n_trials=n_trials, callbacks=[callback])
+        progress.empty()
+
+        # ── Rebuild + evaluate best model on the test set ───────────
+        best_params = dict(study.best_params)
+        X_fit = X_train_s if scaled else X_train
+        X_eval = X_test_s if scaled else X_test
+
+        if model_name == "🧠 MLP (Neural Network)":
+            n_layers = best_params.pop("n_hidden_layers")
+            hidden_layers = tuple(best_params.pop(f"neurons_layer_{i}") for i in range(n_layers))
+            for k in list(best_params.keys()):
+                if k.startswith("neurons_layer_"):
+                    best_params.pop(k)
+            best_model = MLPRegressor(
+                hidden_layer_sizes=hidden_layers, **best_params,
+                random_state=42, early_stopping=True, validation_fraction=0.1,
+            )
+            best_params["n_hidden_layers"] = n_layers
+            best_params["architecture"] = " → ".join(str(n) for n in hidden_layers)
+        elif model_name == "Random Forest":
+            best_model = RandomForestRegressor(**best_params, random_state=42, n_jobs=-1)
+        elif model_name == "Gradient Boosting":
+            best_model = GradientBoostingRegressor(**best_params, random_state=42)
+        elif model_name == "Ridge":
+            best_model = Ridge(**best_params)
+        elif model_name == "Lasso":
+            best_model = Lasso(**best_params)
+        else:
+            best_model = ElasticNet(**best_params)
+
+        best_model.fit(X_fit, y_train_log)
+        y_pred = np.expm1(best_model.predict(X_eval))   # back to dollars
+        y_pred = np.maximum(y_pred, 0)
+
+        # Store results
+        trials_data = []
+        for t in study.trials:
+            row = {"Trial": t.number, "R² (CV)": t.value}
+            row.update(t.params)
+            trials_data.append(row)
+
+        st.session_state["tune_study"] = study
+        st.session_state["tune_trials"] = pd.DataFrame(trials_data)
+        st.session_state["tune_best_params"] = best_params
+        st.session_state["tune_test_metrics"] = {
+            "R²": r2_score(y_test, y_pred),
+            "MAE": mean_absolute_error(y_test, y_pred),
+            "RMSE": float(np.sqrt(mean_squared_error(y_test, y_pred))),
+        }
+        st.session_state["tune_y_test"] = y_test
+        st.session_state["tune_y_pred"] = y_pred
+        st.session_state["tune_model_name"] = model_name
+        st.session_state["tune_ready"] = True
+
+        if wb_run is not None:
+            wandb_tracker.log_metrics(wb_run, {
+                "final/best_cv_r2": study.best_value,
+                "final/test_r2": st.session_state["tune_test_metrics"]["R²"],
+                "final/test_mae": st.session_state["tune_test_metrics"]["MAE"],
+                "final/test_rmse": st.session_state["tune_test_metrics"]["RMSE"],
+            })
+            try:
+                wb_run.summary["best_params"] = {
+                    k: v for k, v in best_params.items() if isinstance(v, (int, float, str))
+                }
+            except Exception:
+                pass
+            wandb_tracker.finish_run(wb_run)
+
+    # ── Display results ─────────────────────────────────────────────
+    if not st.session_state.get("tune_ready"):
+        st.info("Click **Start Optimization** to begin hyperparameter search.")
+        return
+
+    trials_df = st.session_state["tune_trials"]
+    best_params = st.session_state["tune_best_params"]
+    test_metrics = st.session_state["tune_test_metrics"]
+    y_test = st.session_state["tune_y_test"]
+    y_pred = st.session_state["tune_y_pred"]
+    tuned_model = st.session_state["tune_model_name"]
+
+    st.markdown("---")
+
+    # ── Best parameters ─────────────────────────────────────────────
+    st.markdown("### 🏆 Best Hyperparameters")
+    st.success(f"**{tuned_model}** — Best CV R² (log-price): {st.session_state['tune_study'].best_value:.4f}")
+
+    param_cols = st.columns(len(best_params))
+    for i, (k, v) in enumerate(best_params.items()):
+        with param_cols[i]:
+            display_val = f"{v:.4f}" if isinstance(v, float) else str(v)
+            st.metric(k, display_val)
+
+    # ── Test set performance ────────────────────────────────────────
+    st.markdown("### 📈 Test Set Performance (Best Model)")
+    m_cols = st.columns(3)
+    m_cols[0].metric("R²", f"{test_metrics['R²']:.3f}")
+    m_cols[1].metric("MAE", f"${test_metrics['MAE']:,.0f}")
+    m_cols[2].metric("RMSE", f"${test_metrics['RMSE']:,.0f}")
+
+    st.markdown("---")
+
+    # ── Optimization history ────────────────────────────────────────
+    st.markdown("### 📉 Optimization History")
+    col_h1, col_h2 = st.columns(2)
+
+    with col_h1:
+        best_so_far = trials_df["R² (CV)"].cummax()
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=trials_df["Trial"], y=trials_df["R² (CV)"],
+            mode="markers", name="Trial score",
+            marker=dict(color=TEAL_BRIGHT, size=6, opacity=0.6),
+        ))
+        fig.add_trace(go.Scatter(
+            x=trials_df["Trial"], y=best_so_far,
+            mode="lines", name="Best so far",
+            line=dict(color=TEAL, width=3),
+        ))
+        fig.update_layout(
+            height=400, title="Optimization Progress",
+            xaxis_title="Trial", yaxis_title="R² (CV)",
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+    with col_h2:
+        fig = px.scatter(
+            x=y_test, y=y_pred, opacity=0.4,
+            color_discrete_sequence=[TEAL_BRIGHT],
+            title=f"Best {tuned_model} — Actual vs Predicted",
+            labels={"x": "Actual ($)", "y": "Predicted ($)"},
+        )
+        mn = float(min(y_test.min(), y_pred.min()))
+        mx = float(max(y_test.max(), y_pred.max()))
+        fig.add_trace(go.Scatter(
+            x=[mn, mx], y=[mn, mx],
+            mode="lines", line=dict(color="#F43F5E", dash="dash"),
+            showlegend=False,
+        ))
+        fig.update_layout(height=400)
+        st.plotly_chart(fig, use_container_width=True)
+
+    st.markdown("---")
+
+    # ── Parallel coordinates ────────────────────────────────────────
+    st.markdown("### 🔀 Hyperparameter Exploration")
+    param_names = [c for c in trials_df.columns if c not in ("Trial", "R² (CV)")]
+    numeric_params = [p for p in param_names
+                      if pd.to_numeric(trials_df[p], errors="coerce").notna().any()]
+    if len(numeric_params) >= 2:
+        dims = [dict(label="R² (CV)", values=trials_df["R² (CV)"])]
+        for p in numeric_params:
+            dims.append(dict(label=p, values=pd.to_numeric(trials_df[p], errors="coerce")))
+        fig = go.Figure(go.Parcoords(
+            line=dict(
+                color=trials_df["R² (CV)"], colorscale="Teal", showscale=True,
+                cmin=trials_df["R² (CV)"].min(), cmax=trials_df["R² (CV)"].max(),
+            ),
+            dimensions=dims,
+        ))
+        fig.update_layout(height=500, title="Parallel Coordinates — All Trials")
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.caption("Parallel coordinates need at least two numeric hyperparameters.")
+
+    # ── Experiment log ──────────────────────────────────────────────
+    st.markdown("### 📋 Full Experiment Log")
+    st.dataframe(
+        trials_df.sort_values("R² (CV)", ascending=False).reset_index(drop=True),
+        use_container_width=True, height=400,
+    )
