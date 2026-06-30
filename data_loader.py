@@ -35,7 +35,7 @@ DATASET_DESCRIPTIONS = {
         ),
         "target": "Price",
         "target_desc": "Sale price of the property",
-        "source": "Course-provided dataset (dataset_2.csv)",
+        "source": "Kaggle",
         "rows": "—",
         "features_desc": {
             "Area_SqFt": "Floor area of the property (square feet)",

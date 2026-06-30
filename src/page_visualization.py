@@ -11,6 +11,7 @@ import streamlit.components.v1 as components
 import plotly.express as px
 import plotly.graph_objects as go
 import pydeck as pdk
+from sklearn.preprocessing import LabelEncoder
 from data_loader import dataset_selector, get_target, get_features
 
 # Teal palette (matches the accent used on the intro cards)
@@ -51,9 +52,19 @@ def _histogram_svg(values, bins=20, width=220, height=60, color=TEAL):
 
 
 def _correlation_html(df, features, target):
-    cols = [c for c in list(features) + [target]
-            if c in df.columns and pd.api.types.is_numeric_dtype(df[c])]
-    corr = df[cols].corr()
+    # Per project requirement: use scikit-learn's LabelEncoder().fit_transform()
+    # to turn the text (categorical) features into numbers so they can appear in
+    # the correlation matrix alongside the numeric columns. Numeric columns are
+    # passed through unchanged.
+    encoded = pd.DataFrame(index=df.index)
+    for c in list(features) + [target]:
+        if c not in df.columns:
+            continue
+        if pd.api.types.is_numeric_dtype(df[c]):
+            encoded[c] = df[c]
+        else:
+            encoded[c] = LabelEncoder().fit_transform(df[c].astype(str))
+    corr = encoded.corr()
 
     def cell(v):
         if v >= 0:
