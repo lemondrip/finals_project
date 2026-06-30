@@ -1,17 +1,3 @@
-"""
-Page 5 — Hyperparameter Tuning
-================================
-Automated hyperparameter optimization using Optuna, with W&B experiment
-tracking and visualization.
-
-Based on the course template's tuning page, with two adaptations so it
-runs on this project's data:
-  • categorical columns are one-hot encoded (the template assumed every
-    feature was numeric — df[features].values would crash on strings);
-  • models learn on log(price) and predictions are inverted with expm1,
-    so the large, right-skewed prices don't break the neural network.
-"""
-
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -19,9 +5,8 @@ import plotly.express as px
 import plotly.graph_objects as go
 from sklearn.model_selection import train_test_split, cross_val_score
 from sklearn.preprocessing import StandardScaler
+from sklearn.linear_model import LinearRegression, Ridge
 from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
-from sklearn.linear_model import Ridge, Lasso, ElasticNet
-from sklearn.neural_network import MLPRegressor
 from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
 from data_loader import dataset_selector, get_target, get_features
 from src import wandb_tracker
@@ -40,8 +25,8 @@ from src import wandb_tracker
 TEAL = "#0D9488"
 TEAL_BRIGHT = "#2DD4BF"
 
-# Models that need scaled inputs (linear + neural net); trees use raw.
-_SCALED_MODELS = {"🧠 MLP (Neural Network)", "Ridge", "Lasso", "Elastic Net"}
+# Linear models train on scaled inputs; trees use the raw matrix.
+_SCALED_MODELS = {"Linear Regression", "Ridge"}
 
 
 def render():
@@ -76,7 +61,7 @@ def render():
     with col1:
         model_name = st.selectbox(
             "Model to tune",
-            ["🧠 MLP (Neural Network)", "Random Forest", "Gradient Boosting", "Ridge", "Lasso", "Elastic Net"],
+            ["Linear Regression", "Ridge", "Random Forest", "Gradient Boosting"],
         )
     with col2:
         n_trials = st.slider("Number of trials", 5, 100, 15, step=5)
@@ -86,15 +71,10 @@ def render():
     # ── Hyperparameter search spaces ────────────────────────────────
     st.markdown("### 🔧 Search Space")
     search_spaces = {
-        "🧠 MLP (Neural Network)": {
-            "n_hidden_layers": "1 — 4",
-            "neurons_per_layer": "16 — 256",
-            "activation": "relu, tanh, logistic",
-            "learning_rate_init": "0.0001 — 0.01",
-            "alpha (L2 penalty)": "0.0001 — 0.1",
-            "batch_size": "16 — 128",
-            "max_iter": "200 — 1000",
+        "Linear Regression": {
+            "fit_intercept": "True / False  (baseline — no continuous hyperparameters)",
         },
+        "Ridge": {"alpha": "0.001 — 100"},
         "Random Forest": {
             "n_estimators": "50 — 500",
             "max_depth": "3 — 30",
@@ -108,30 +88,16 @@ def render():
             "subsample": "0.6 — 1.0",
             "min_samples_split": "2 — 20",
         },
-        "Ridge": {"alpha": "0.001 — 100"},
-        "Lasso": {"alpha": "0.001 — 100"},
-        "Elastic Net": {"alpha": "0.001 — 100", "l1_ratio": "0.0 — 1.0"},
     }
-
-    # ── MLP architecture visualizer ─────────────────────────────────
-    if model_name == "🧠 MLP (Neural Network)":
-        st.markdown("### 🏗️ Neural Network Architecture Preview")
-        st.markdown(
-            "The MLP (Multi-Layer Perceptron) is a fully-connected feedforward "
-            "neural network. Optuna will search over the number of hidden layers, "
-            "neurons per layer, activation function, learning rate, and regularization."
-        )
-        st.markdown(
-            "```\n"
-            "Input Layer ──▶ Hidden Layer(s) ──▶ Output Layer\n"
-            "  (features)    (relu/tanh/logistic)   (log-price)\n"
-            "```"
-        )
-
-    space_df = pd.DataFrame(
-        [{"Parameter": k, "Range": v} for k, v in search_spaces[model_name].items()]
+    st.dataframe(
+        pd.DataFrame([{"Parameter": k, "Range": v} for k, v in search_spaces[model_name].items()]),
+        use_container_width=True, hide_index=True,
     )
-    st.dataframe(space_df, use_container_width=True, hide_index=True)
+    if model_name == "Linear Regression":
+        st.caption(
+            "ℹ️ Linear Regression has no continuous hyperparameters to search, so it acts as a "
+            "baseline — Optuna only flips `fit_intercept`."
+        )
 
     # ── W&B toggle ──────────────────────────────────────────────────
     track_wandb = st.checkbox(
@@ -171,21 +137,12 @@ def render():
         X_obj = X_train_s if scaled else X_train
 
         def objective(trial):
-            if model_name == "🧠 MLP (Neural Network)":
-                n_layers = trial.suggest_int("n_hidden_layers", 1, 4)
-                hidden_layers = tuple(
-                    trial.suggest_int(f"neurons_layer_{i}", 16, 256, log=True)
-                    for i in range(n_layers)
+            if model_name == "Linear Regression":
+                model = LinearRegression(
+                    fit_intercept=trial.suggest_categorical("fit_intercept", [True, False]),
                 )
-                model = MLPRegressor(
-                    hidden_layer_sizes=hidden_layers,
-                    activation=trial.suggest_categorical("activation", ["relu", "tanh", "logistic"]),
-                    learning_rate_init=trial.suggest_float("learning_rate_init", 1e-4, 1e-2, log=True),
-                    alpha=trial.suggest_float("alpha", 1e-4, 0.1, log=True),
-                    batch_size=trial.suggest_int("batch_size", 16, 128, log=True),
-                    max_iter=trial.suggest_int("max_iter", 200, 1000, step=100),
-                    random_state=42, early_stopping=True, validation_fraction=0.1,
-                )
+            elif model_name == "Ridge":
+                model = Ridge(alpha=trial.suggest_float("alpha", 0.001, 100, log=True))
             elif model_name == "Random Forest":
                 model = RandomForestRegressor(
                     n_estimators=trial.suggest_int("n_estimators", 50, 500),
@@ -194,7 +151,7 @@ def render():
                     min_samples_leaf=trial.suggest_int("min_samples_leaf", 1, 10),
                     random_state=42, n_jobs=-1,
                 )
-            elif model_name == "Gradient Boosting":
+            else:  # Gradient Boosting
                 model = GradientBoostingRegressor(
                     n_estimators=trial.suggest_int("n_estimators", 50, 500),
                     max_depth=trial.suggest_int("max_depth", 2, 10),
@@ -203,16 +160,6 @@ def render():
                     min_samples_split=trial.suggest_int("min_samples_split", 2, 20),
                     random_state=42,
                 )
-            elif model_name == "Ridge":
-                model = Ridge(alpha=trial.suggest_float("alpha", 0.001, 100, log=True))
-            elif model_name == "Lasso":
-                model = Lasso(alpha=trial.suggest_float("alpha", 0.001, 100, log=True))
-            else:
-                model = ElasticNet(
-                    alpha=trial.suggest_float("alpha", 0.001, 100, log=True),
-                    l1_ratio=trial.suggest_float("l1_ratio", 0.0, 1.0),
-                )
-
             scores = cross_val_score(model, X_obj, y_train_log, cv=cv_folds, scoring="r2")
             return scores.mean()
 
@@ -245,28 +192,14 @@ def render():
         X_fit = X_train_s if scaled else X_train
         X_eval = X_test_s if scaled else X_test
 
-        if model_name == "🧠 MLP (Neural Network)":
-            n_layers = best_params.pop("n_hidden_layers")
-            hidden_layers = tuple(best_params.pop(f"neurons_layer_{i}") for i in range(n_layers))
-            for k in list(best_params.keys()):
-                if k.startswith("neurons_layer_"):
-                    best_params.pop(k)
-            best_model = MLPRegressor(
-                hidden_layer_sizes=hidden_layers, **best_params,
-                random_state=42, early_stopping=True, validation_fraction=0.1,
-            )
-            best_params["n_hidden_layers"] = n_layers
-            best_params["architecture"] = " → ".join(str(n) for n in hidden_layers)
-        elif model_name == "Random Forest":
-            best_model = RandomForestRegressor(**best_params, random_state=42, n_jobs=-1)
-        elif model_name == "Gradient Boosting":
-            best_model = GradientBoostingRegressor(**best_params, random_state=42)
+        if model_name == "Linear Regression":
+            best_model = LinearRegression(**best_params)
         elif model_name == "Ridge":
             best_model = Ridge(**best_params)
-        elif model_name == "Lasso":
-            best_model = Lasso(**best_params)
+        elif model_name == "Random Forest":
+            best_model = RandomForestRegressor(**best_params, random_state=42, n_jobs=-1)
         else:
-            best_model = ElasticNet(**best_params)
+            best_model = GradientBoostingRegressor(**best_params, random_state=42)
 
         best_model.fit(X_fit, y_train_log)
         y_pred = np.expm1(best_model.predict(X_eval))   # back to dollars
@@ -301,7 +234,7 @@ def render():
             })
             try:
                 wb_run.summary["best_params"] = {
-                    k: v for k, v in best_params.items() if isinstance(v, (int, float, str))
+                    k: v for k, v in best_params.items() if isinstance(v, (int, float, str, bool))
                 }
             except Exception:
                 pass
@@ -325,7 +258,7 @@ def render():
     st.markdown("### 🏆 Best Hyperparameters")
     st.success(f"**{tuned_model}** — Best CV R² (log-price): {st.session_state['tune_study'].best_value:.4f}")
 
-    param_cols = st.columns(len(best_params))
+    param_cols = st.columns(max(len(best_params), 1))
     for i, (k, v) in enumerate(best_params.items()):
         with param_cols[i]:
             display_val = f"{v:.4f}" if isinstance(v, float) else str(v)
@@ -401,7 +334,7 @@ def render():
         fig.update_layout(height=500, title="Parallel Coordinates — All Trials")
         st.plotly_chart(fig, use_container_width=True)
     else:
-        st.caption("Parallel coordinates need at least two numeric hyperparameters.")
+        st.caption("Parallel coordinates need at least two numeric hyperparameters (RF / Gradient Boosting).")
 
     # ── Experiment log ──────────────────────────────────────────────
     st.markdown("### 📋 Full Experiment Log")
